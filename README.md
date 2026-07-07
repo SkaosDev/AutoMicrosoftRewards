@@ -1,63 +1,139 @@
-# AutoMicrosoftRewards
+<h1 align="center">AutoMicrosoftRewards</h1>
 
-Extension Firefox (Manifest V3) pour automatiser Microsoft Rewards : recherches Bing
-(desktop + mobile), tâches quotidiennes / quiz, et dashboard de suivi des points.
+<p align="center">
+  Extension Firefox pour automatiser l'accumulation de points Microsoft Rewards :
+  recherches Bing, lecture du solde et suivi depuis un popup.
+</p>
 
-> ⚠️ **Avertissement** — L'automatisation de Microsoft Rewards enfreint les conditions
-> d'utilisation de Microsoft et peut entraîner la suspension du compte. Ce projet est
-> fourni à titre éducatif. Utilisation à vos propres risques.
+<p align="center">
+  <img alt="Manifest V3" src="https://img.shields.io/badge/Manifest-V3-blue">
+  <img alt="Firefox" src="https://img.shields.io/badge/Firefox-109%2B-orange">
+  <img alt="Stack" src="https://img.shields.io/badge/JS-Vite%20%2B%20Preact-yellow">
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-green">
+</p>
 
-## Stack
+---
 
-- **JavaScript** (ES modules) + **Vite**
-- **Manifest V3** (event page background, Firefox 109+)
-- **Preact** pour le popup et la page d'options
-- **Vitest** pour les tests unitaires
-- `webextension-polyfill` pour une API `browser.*` promisifiée
+> [!WARNING]
+> **Avertissement.** L'automatisation de Microsoft Rewards est **contraire aux
+> [conditions d'utilisation de Microsoft](https://www.microsoft.com/servicesagreement)**
+> et peut entraîner la **suspension ou la fermeture de votre compte**, ainsi que la
+> perte de vos points. Ce projet est publié à **titre éducatif**, pour illustrer le
+> développement d'une extension WebExtension. Vous l'utilisez **à vos propres risques**.
 
-## Structure
+## Fonctionnalités
+
+- 🔎 **Recherches Bing automatiques** — ouvre des onglets de recherche en arrière-plan
+  avec des requêtes aléatoires, puis les referme, à un rythme configurable.
+- 💰 **Lecture du solde** — au démarrage, ouvre le dashboard Rewards, lit le nombre de
+  points disponibles et l'affiche dans le popup.
+- 📊 **Popup de suivi** — solde de points, statut du run et progression des recherches.
+- ⚙️ **Page de réglages** — nombre de recherches, temps entre les recherches et délai
+  avant fermeture des onglets.
+- 🧩 **Manifest V3** — pensé pour Firefox (109+), sans dépendance à un service externe.
+
+> 🚧 La complétion automatique des tâches quotidiennes / quiz est prévue mais **pas
+> encore implémentée** (voir [Feuille de route](#feuille-de-route)).
+
+## Stack technique
+
+| Élément      | Choix                                             |
+|--------------|---------------------------------------------------|
+| Langage      | JavaScript (ES modules)                           |
+| Build        | [Vite](https://vitejs.dev/) + `vite-plugin-web-extension` |
+| UI           | [Preact](https://preactjs.com/) (popup & options) |
+| API navigateur | `webextension-polyfill`                         |
+| Tests        | [Vitest](https://vitest.dev/)                     |
+
+## Installation
+
+### Prérequis
+
+- [Node.js](https://nodejs.org/) 18+ et npm
+- Firefox 109 ou plus récent
+
+### Build
+
+```bash
+git clone https://github.com/SkaosDev/AutoMicrosoftRewards.git
+cd AutoMicrosoftRewards
+npm install
+npm run build      # génère le dossier dist/
+```
+
+### Charger l'extension dans Firefox
+
+L'extension se charge dans **votre** Firefox habituel (celui où vous êtes connecté à
+votre compte Microsoft) :
+
+1. Ouvrez `about:debugging#/runtime/this-firefox`
+2. Cliquez sur **« Charger un module complémentaire temporaire… »**
+3. Sélectionnez le fichier **`dist/manifest.json`**
+
+> ℹ️ Un module « temporaire » disparaît au redémarrage de Firefox : il faut refaire
+> l'opération. C'est une limite de Firefox pour les extensions non signées. Pour une
+> installation permanente, il faut signer l'extension (compte
+> [AMO](https://addons.mozilla.org/)) ou utiliser Firefox Developer Edition / Nightly / ESR.
+
+## Utilisation
+
+1. Cliquez sur l'icône de l'extension pour ouvrir le popup.
+2. (Optionnel) Ouvrez **Réglages…** pour ajuster le nombre de recherches et les délais.
+3. Cliquez sur **Démarrer**. L'extension :
+   - ouvre le dashboard Rewards et lit votre solde de points ;
+   - affiche le solde dans le popup ;
+   - lance les recherches Bing après une courte pause, puis referme le dashboard.
+
+Un run va **jusqu'au bout** (il n'y a pas de bouton d'arrêt).
+
+## Réglages
+
+| Réglage                          | Défaut       | Description                                    |
+|----------------------------------|--------------|------------------------------------------------|
+| Nombre de recherches             | `35`         | Nombre de recherches Bing par run              |
+| Temps entre les recherches (min/max) | `7000` / `10000` ms | Délai aléatoire entre deux recherches   |
+| Temps avant fermeture (min/max)  | `4000` / `6000` ms  | Délai aléatoire avant de fermer un onglet |
+| Recherches automatiques          | activées     | Active/désactive la partie recherche           |
+| Tâches quotidiennes              | activées     | (À venir) complétion des tâches / quiz         |
+
+## Développement
+
+```bash
+npm run watch      # reconstruit dist/ à chaque modification (sans lancer de navigateur)
+npm test           # lance les tests Vitest
+```
+
+Pendant le dev, après un changement, cliquez sur **« Recharger »** sur l'extension dans
+`about:debugging` — inutile de la re-sélectionner.
+
+### Structure du projet
 
 ```
 src/
-├── manifest.js       # Définition du manifest MV3 (objet JS)
-├── background/       # Orchestrateur (alarms, routeur de messages, machine à états)
-├── content/          # Scripts injectés (recherches Bing, page Rewards)
+├── manifest.js       # Définition du manifest MV3
+├── background/       # Orchestrateur : recherches, alarmes, machine à états
+├── content/          # Script injecté sur la page Rewards (lecture du solde)
 ├── popup/            # Dashboard Preact
 ├── options/          # Écran de réglages Preact
 └── lib/              # Modules partagés (storage, messaging, constants, rewards)
-public/icons/         # Icônes (copiées telles quelles dans dist/)
-tests/                # Tests Vitest des modules lib
+public/icons/         # Icônes de l'extension
+tests/                # Tests unitaires (Vitest)
 ```
 
-## Démarrage
+## Feuille de route
 
-```bash
-npm install
-npm run build        # Produit dist/ (build unique)
-npm run watch        # Reconstruit dist/ à chaque modification (dev)
-npm test             # Lance les tests Vitest
-```
+- [ ] Complétion automatique du *daily set*, des quiz et des sondages
+- [ ] Signature de l'extension pour une installation permanente
+- [ ] Robustesse des sélecteurs face aux évolutions du site Rewards
 
-### Charger l'extension dans TON Firefox (avec ta session Microsoft)
+## Avertissement de fragilité
 
-On ne lance **pas** un Firefox « dev » jetable : on charge l'extension dans ton
-Firefox habituel, pour bénéficier de ta session Microsoft déjà connectée.
+L'extension s'appuie sur la structure HTML actuelle du site Microsoft Rewards
+(par ex. le libellé « Points disponibles » et certaines classes CSS). Microsoft peut
+modifier son site à tout moment et **casser la lecture du solde ou les recherches** ;
+les sélecteurs concernés sont regroupés en tête des fichiers `src/content/` et
+`src/background/` pour faciliter les corrections.
 
-1. `npm run build` (ou `npm run watch` pendant le dev)
-2. Dans ton Firefox, ouvrir `about:debugging#/runtime/this-firefox`
-3. « Charger un module complémentaire temporaire… »
-4. Sélectionner **`dist/manifest.json`**
+## Licence
 
-Après une modif de code (avec `npm run watch` qui a reconstruit `dist/`), il suffit
-de cliquer **« Recharger »** sur l'extension dans `about:debugging` — pas besoin de
-la re-sélectionner.
-
-> ℹ️ Un module « temporaire » disparaît au **redémarrage** de Firefox : il faut
-> refaire l'étape 3-4. C'est normal — Firefox standard n'installe pas d'extension
-> non signée de façon permanente. Pour une install permanente, il faut signer
-> l'extension (compte AMO) ou utiliser Firefox Developer Edition / Nightly / ESR.
-
-## État du projet
-
-Squelette / scaffold. Les stubs marqués `// TODO` (sélecteurs DOM, timings des
-recherches, logique complète des quiz) restent à implémenter.
+Distribué sous licence **MIT**. Voir le fichier [`LICENSE`](./LICENSE).
