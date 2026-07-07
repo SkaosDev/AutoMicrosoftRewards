@@ -4,6 +4,7 @@
 export const MSG = {
   // popup/options -> background
   START: 'start',
+  STOP: 'stop',
   GET_STATE: 'get-state',
   // background -> content
   SCRAPE_POINTS: 'scrape-points',
@@ -39,12 +40,15 @@ export const DEFAULT_SETTINGS = {
   closeMaxMs: 6000,
   enableSearches: true,
   enableDailyTasks: true,
+  // Planification : lancer automatiquement le run chaque jour à une heure locale.
+  dailyScheduleEnabled: false,
+  dailyScheduleTime: '10:00', // HH:MM, heure locale
 };
 
 /** État runtime par défaut. */
 export const DEFAULT_STATE = {
   status: STATUS.IDLE,
-  points: 0,
+  points: null, // null = solde encore inconnu (affiché « … »)
   searchesDone: 0,
   lastRun: null,
   error: null,

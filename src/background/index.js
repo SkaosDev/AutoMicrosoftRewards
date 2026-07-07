@@ -12,7 +12,7 @@
 //   - Enchaîner les recherches via l'alarme ALARM_SEARCH.
 
 import browser from 'webextension-polyfill';
-import { MSG, STATUS, URLS } from '../lib/constants.js';
+import { MSG, STATUS, URLS, STORAGE_KEYS } from '../lib/constants.js';
 import { on } from '../lib/messaging.js';
 import { ensureDefaults, getState, setState, getSettings } from '../lib/storage.js';
 import { totalSearches } from '../lib/rewards.js';
@@ -36,6 +36,8 @@ const SCRAPE_TIMEOUT_MS = 15000;
 let dashboardTabId = null;
 let searchesStarted = false;
 let startFallbackTimer = null;
+// Onglet Rewards ouvert juste pour relire le solde (à l'arrêt).
+let refreshTabId = null;
 
 const words = [
   "food", "drink", "restaurant", "cafe", "bar", "pub", "club", "diner", "eatery", "tavern",
@@ -80,8 +82,17 @@ const words = [
 
 browser.runtime.onInstalled.addListener(async () => {
   await ensureDefaults();
-  // Planifie un run quotidien (peut être ajusté depuis les options plus tard).
-  await browser.alarms.create(ALARM_DAILY, { periodInMinutes: 60 * 24 });
+  await scheduleDailyAlarm();
+});
+
+// Au démarrage du navigateur, on (re)cale l'alarme quotidienne.
+browser.runtime.onStartup.addListener(() => scheduleDailyAlarm().catch(reportError));
+
+// Quand les réglages changent (page d'options), on replanifie l'alarme quotidienne.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[STORAGE_KEYS.SETTINGS]) {
+    scheduleDailyAlarm().catch(reportError);
+  }
 });
 
 browser.alarms.onAlarm.addListener((alarm) => {
@@ -89,14 +100,45 @@ browser.alarms.onAlarm.addListener((alarm) => {
   else if (alarm.name === ALARM_SEARCH) searchTick().catch(reportError);
 });
 
+// --- Planification quotidienne ----------------------------------------------
+
+/** (Re)planifie le lancement quotidien selon les réglages, en heure locale. */
+async function scheduleDailyAlarm() {
+  await browser.alarms.clear(ALARM_DAILY);
+  const settings = await getSettings();
+  if (!settings.dailyScheduleEnabled) return;
+  await browser.alarms.create(ALARM_DAILY, {
+    when: nextDailyTime(settings.dailyScheduleTime || '10:00'),
+    periodInMinutes: 24 * 60,
+  });
+}
+
+/**
+ * Prochain instant (timestamp ms) correspondant à l'heure locale "HH:MM" : aujourd'hui
+ * si c'est encore à venir, sinon demain.
+ * @param {string} hhmm
+ * @returns {number}
+ */
+function nextDailyTime(hhmm) {
+  const [h, m] = String(hhmm).split(':').map(Number);
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h || 0, m || 0, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return next.getTime();
+}
+
 // --- Routeur de messages ----------------------------------------------------
 
 on(MSG.START, () => startRun());
+on(MSG.STOP, () => stopRun());
 on(MSG.GET_STATE, () => getState());
 
 on(MSG.POINTS_UPDATE, async (payload) => {
   const points = Number(payload?.points);
   if (!Number.isNaN(points)) await broadcastState({ points });
+
+  // Si on avait ouvert Rewards juste pour relire le solde (à l'arrêt), on referme.
+  closeRefreshTab();
 
   // Pendant le démarrage : dès que le solde arrive, on lance les recherches après une pause.
   if (!searchesStarted) {
@@ -166,6 +208,44 @@ function closeDashboard() {
   if (dashboardTabId == null) return;
   const id = dashboardTabId;
   dashboardTabId = null;
+  browser.tabs.remove(id).catch(() => {});
+}
+
+/**
+ * Arrête l'automatisation : coupe les recherches en cours, réinitialise l'affichage du
+ * popup (sauf les points), puis rouvre Rewards pour relire le score réel du moment.
+ */
+async function stopRun() {
+  // Empêche tout (re)démarrage en attente et coupe la boucle de recherche.
+  searchesStarted = true;
+  if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
+  await browser.alarms.clear(ALARM_SEARCH);
+  closeDashboard();
+
+  // Réinitialise l'état affiché, en conservant les points connus.
+  await broadcastState({ status: STATUS.IDLE, searchesDone: 0, error: null, lastRun: null });
+
+  // Relit le solde actuel (les recherches déjà faites ont pu rapporter des points).
+  await refreshPoints();
+  return getState();
+}
+
+/** Ouvre Rewards en arrière-plan pour relire le solde, puis referme l'onglet. */
+async function refreshPoints() {
+  try {
+    const tab = await browser.tabs.create({ url: URLS.REWARDS_DASHBOARD, active: false });
+    refreshTabId = tab.id;
+    // Filet de sécurité : referme même si la lecture n'aboutit pas.
+    setTimeout(() => closeRefreshTab(), SCRAPE_TIMEOUT_MS);
+  } catch (err) {
+    // Ouverture impossible : on ne fait rien de plus.
+  }
+}
+
+function closeRefreshTab() {
+  if (refreshTabId == null) return;
+  const id = refreshTabId;
+  refreshTabId = null;
   browser.tabs.remove(id).catch(() => {});
 }
 

@@ -38,7 +38,7 @@ export function App() {
 
       <div style={{ marginBottom: '12px' }}>
         <div style={{ fontSize: '28px', fontWeight: 700 }}>
-          {(state.points ?? 0).toLocaleString('fr-FR')}
+          {state.points == null ? '…' : state.points.toLocaleString('fr-FR')}
         </div>
         <div style={{ opacity: 0.7 }}>points</div>
       </div>
@@ -65,6 +65,15 @@ export function App() {
       >
         {running ? 'En cours…' : 'Démarrer'}
       </button>
+
+      {running && (
+        <button
+          onClick={() => send(MSG.STOP).then(setState)}
+          style={{ ...btnStyle(true), marginTop: '8px', background: '#dc2626' }}
+        >
+          Arrêter
+        </button>
+      )}
 
       <button
         onClick={() => browser.runtime.openOptionsPage()}

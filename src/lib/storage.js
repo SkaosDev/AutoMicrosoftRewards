@@ -60,3 +60,9 @@ export async function ensureDefaults() {
   if (!stored[STORAGE_KEYS.STATE]) patch[STORAGE_KEYS.STATE] = DEFAULT_STATE;
   if (Object.keys(patch).length) await browser.storage.local.set(patch);
 }
+
+/** Réinitialise complètement l'extension : vide tout le storage et réécrit les défauts. */
+export async function resetAll() {
+  await browser.storage.local.clear();
+  await ensureDefaults();
+}
