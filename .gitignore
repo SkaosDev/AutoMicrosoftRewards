@@ -1,0 +1,27 @@
+# Dépendances
+node_modules/
+
+# Build
+dist/
+*.zip
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Éditeurs / OS
+.DS_Store
+Thumbs.db
+*.log
+
+# web-ext
+web-ext-artifacts/
+
+# Env
+.env
+.env.local
+
+# IDE
+.idea
+AutoMicrosoftRewards.iml
