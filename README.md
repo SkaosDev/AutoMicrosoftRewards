@@ -26,10 +26,14 @@
 - 🔎 **Recherches Bing automatiques** — ouvre des onglets de recherche en arrière-plan
   avec des requêtes aléatoires, puis les referme, à un rythme configurable.
 - 💰 **Lecture du solde** — au démarrage, ouvre le dashboard Rewards, lit le nombre de
-  points disponibles et l'affiche dans le popup.
+  points disponibles et l'affiche dans le popup (`…` tant que le solde est inconnu).
+- ⏰ **Planification quotidienne** — option pour lancer automatiquement l'automatisation
+  chaque jour à une heure locale de votre choix.
+- ⏹️ **Arrêt à tout moment** — un bouton stoppe le run, réinitialise l'affichage
+  (hors points) et relit le score courant.
 - 📊 **Popup de suivi** — solde de points, statut du run et progression des recherches.
-- ⚙️ **Page de réglages** — nombre de recherches, temps entre les recherches et délai
-  avant fermeture des onglets.
+- ⚙️ **Page de réglages** — nombre de recherches, délais, planification, et
+  réinitialisation complète de l'extension.
 - 🧩 **Manifest V3** — pensé pour Firefox (109+), sans dépendance à un service externe.
 
 > 🚧 La complétion automatique des tâches quotidiennes / quiz est prévue mais **pas
@@ -78,23 +82,38 @@ votre compte Microsoft) :
 ## Utilisation
 
 1. Cliquez sur l'icône de l'extension pour ouvrir le popup.
-2. (Optionnel) Ouvrez **Réglages…** pour ajuster le nombre de recherches et les délais.
+2. (Optionnel) Ouvrez **Réglages…** pour ajuster le nombre de recherches, les délais
+   et la planification.
 3. Cliquez sur **Démarrer**. L'extension :
    - ouvre le dashboard Rewards et lit votre solde de points ;
    - affiche le solde dans le popup ;
    - lance les recherches Bing après une courte pause, puis referme le dashboard.
+4. Pour interrompre, cliquez sur **Arrêter** : le run s'arrête, l'affichage est
+   réinitialisé (les points sont conservés) et le score courant est relu.
 
-Un run va **jusqu'au bout** (il n'y a pas de bouton d'arrêt).
+### Lancement automatique
+
+Dans **Réglages → Planification**, cochez **« Lancer automatiquement chaque jour »** et
+choisissez une heure (**heure locale**, `10:00` par défaut). L'automatisation se
+déclenchera seule chaque jour à cette heure.
+
+> ℹ️ Le déclenchement repose sur les alarmes de Firefox : si le navigateur est fermé à
+> l'heure prévue, le run démarre au prochain lancement de Firefox.
 
 ## Réglages
 
 | Réglage                          | Défaut       | Description                                    |
 |----------------------------------|--------------|------------------------------------------------|
+| Activer les recherches Bing      | activé       | Active/désactive la partie recherche           |
 | Nombre de recherches             | `35`         | Nombre de recherches Bing par run              |
 | Temps entre les recherches (min/max) | `7000` / `10000` ms | Délai aléatoire entre deux recherches   |
 | Temps avant fermeture (min/max)  | `4000` / `6000` ms  | Délai aléatoire avant de fermer un onglet |
-| Recherches automatiques          | activées     | Active/désactive la partie recherche           |
+| Lancer automatiquement chaque jour | désactivé  | Planifie un run quotidien à heure fixe         |
+| Heure (locale)                   | `10:00`      | Heure du run quotidien (si planification activée) |
 | Tâches quotidiennes              | activées     | (À venir) complétion des tâches / quiz         |
+
+Le bouton **« Réinitialiser l'extension »** (section *Zone de danger*) efface tout le
+stockage — réglages, progression et points — et rétablit les valeurs par défaut.
 
 ## Développement
 
