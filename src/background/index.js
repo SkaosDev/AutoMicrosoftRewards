@@ -1,15 +1,5 @@
-// Background event page — orchestrateur + moteur de recherche Bing.
-//
-// Le moteur fonctionne "par onglets" : pour chaque recherche, on ouvre un onglet Bing
-// en arrière-plan sur l'URL de résultats, puis on le referme après un court délai.
-// Ces API (browser.tabs / browser.alarms) ne sont disponibles QUE dans le background —
-// c'est pourquoi cette logique vit ici et non dans un content script.
-//
-// Responsabilités :
-//   - Initialiser les valeurs par défaut à l'installation.
-//   - Router les messages venant du popup / des content scripts.
-//   - Piloter une machine à états simple : idle -> searching -> tasks -> done.
-//   - Enchaîner les recherches via l'alarme ALARM_SEARCH.
+// Background : orchestre le run (recherches + tâches Rewards) et pilote les onglets.
+// Les API tabs/alarms ne sont dispo qu'ici, d'où le pilotage centralisé.
 
 import browser from 'webextension-polyfill';
 import { MSG, STATUS, URLS, STORAGE_KEYS } from '../lib/constants.js';
@@ -20,35 +10,23 @@ import { totalSearches } from '../lib/rewards.js';
 const ALARM_DAILY = 'daily-run';
 const ALARM_SEARCH = 'openTabAlarm';
 
-// --- Constantes de recherche ------------------------------------------------
-
 const BING_SEARCH_URL = 'https://www.bing.com/search?q=';
 const BING_SEARCH_PARAMS = '&qs=n&form=QBLH&sp=-1&pq=';
-// Délai de fermeture d'onglet par défaut (ms) si les réglages n'en fournissent pas.
 const FALLBACK_CLOSE_MS = 5000;
 
-// Démarrage : pause après lecture du solde avant de lancer les recherches, et filet
-// de sécurité si la lecture du solde n'aboutit pas.
 const START_AFTER_POINTS_MS = 3000;
 const SCRAPE_TIMEOUT_MS = 15000;
-// Filet de sécurité : fin forcée de la phase "tâches" si le content script ne répond pas.
 const DAILY_SET_TIMEOUT_MS = 120000;
-// Idem pour "Continuer à gagner", plus long car la page peut compter davantage de cartes.
 const EARN_TIMEOUT_MS = 300000;
 
-// État de démarrage (en mémoire ; le run reste actif tant que la page vit).
 let dashboardTabId = null;
 let searchesStarted = false;
 let startFallbackTimer = null;
-// Onglet Rewards ouvert juste pour relire le solde (à l'arrêt).
 let refreshTabId = null;
-// Onglet Rewards de la phase "tâches" (Ensemble du jour) + son filet de sécurité.
 let tasksTabId = null;
 let tasksFallbackTimer = null;
-// Onglet Rewards de la phase "earn" (Continuer à gagner) + son filet de sécurité.
 let earnTabId = null;
 let earnFallbackTimer = null;
-// Onglet Rewards de la phase "finalisation" (lecture du score final) + filet de sécurité.
 let finalTabId = null;
 let finalFallbackTimer = null;
 
@@ -98,10 +76,8 @@ browser.runtime.onInstalled.addListener(async () => {
   await scheduleDailyAlarm();
 });
 
-// Au démarrage du navigateur, on (re)cale l'alarme quotidienne.
 browser.runtime.onStartup.addListener(() => scheduleDailyAlarm().catch(reportError));
 
-// Quand les réglages changent (page d'options), on replanifie l'alarme quotidienne.
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[STORAGE_KEYS.SETTINGS]) {
     scheduleDailyAlarm().catch(reportError);
@@ -113,8 +89,7 @@ browser.alarms.onAlarm.addListener((alarm) => {
   else if (alarm.name === ALARM_SEARCH) searchTick().catch(reportError);
 });
 
-// Ferme les onglets ouverts par les cartes (Ensemble du jour / Continuer à gagner),
-// après un délai (mêmes bornes que la fermeture des onglets de recherche).
+// Referme les onglets ouverts par les cartes (Ensemble du jour / Continuer à gagner).
 browser.tabs.onCreated.addListener((tab) => {
   const opener = tab.openerTabId;
   if (opener == null || (opener !== tasksTabId && opener !== earnTabId)) return;
@@ -127,7 +102,6 @@ browser.tabs.onCreated.addListener((tab) => {
 
 // --- Planification quotidienne ----------------------------------------------
 
-/** (Re)planifie le lancement quotidien selon les réglages, en heure locale. */
 async function scheduleDailyAlarm() {
   await browser.alarms.clear(ALARM_DAILY);
   const settings = await getSettings();
@@ -138,12 +112,7 @@ async function scheduleDailyAlarm() {
   });
 }
 
-/**
- * Prochain instant (timestamp ms) correspondant à l'heure locale "HH:MM" : aujourd'hui
- * si c'est encore à venir, sinon demain.
- * @param {string} hhmm
- * @returns {number}
- */
+// Prochain "HH:MM" en heure locale (aujourd'hui si à venir, sinon demain).
 function nextDailyTime(hhmm) {
   const [h, m] = String(hhmm).split(':').map(Number);
   const now = new Date();
@@ -152,7 +121,7 @@ function nextDailyTime(hhmm) {
   return next.getTime();
 }
 
-// --- Routeur de messages ----------------------------------------------------
+// --- Messages ---------------------------------------------------------------
 
 on(MSG.START, () => startRun());
 on(MSG.STOP, () => stopRun());
@@ -164,28 +133,25 @@ on(MSG.POINTS_UPDATE, async (payload) => {
   const points = Number(payload?.points);
   if (!Number.isNaN(points)) await broadcastState({ points });
 
-  // Onglet ouvert juste pour relire le solde (à l'arrêt) : on referme.
   closeRefreshTab();
 
   const state = await getState();
 
-  // Finalisation : le solde final est arrivé -> on peut terminer.
   if (state.status === STATUS.FINALIZING) {
     await finishFinalize();
     return;
   }
 
-  // Démarrage : dès que le solde arrive, on lance les recherches après une pause.
+  // Au démarrage, le solde lu déclenche les recherches après une courte pause.
   if (!searchesStarted && state.status === STATUS.SEARCHING && (state.searchesDone || 0) === 0) {
     if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
     setTimeout(() => beginSearches().catch(reportError), START_AFTER_POINTS_MS);
   }
 });
 
-// --- Machine à états --------------------------------------------------------
+// --- Déroulé du run ---------------------------------------------------------
 
 async function startRun() {
-  // Réinitialise l'état de démarrage.
   searchesStarted = false;
   dashboardTabId = null;
   if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
@@ -197,26 +163,20 @@ async function startRun() {
     lastRun: nowIso(),
   });
 
-  // 1. Ouvre le dashboard Rewards. Son content script attend le chargement, lit le
-  //    solde puis envoie POINTS_UPDATE — ce qui déclenche les recherches (handler ci-dessus).
+  // Ouvre le dashboard ; son content script lit le solde puis envoie POINTS_UPDATE.
   try {
     const tab = await browser.tabs.create({ url: URLS.REWARDS_DASHBOARD, active: false });
     dashboardTabId = tab.id;
   } catch (err) {
-    // Si l'ouverture échoue, on lance quand même les recherches.
     await beginSearches();
     return getState();
   }
 
-  // 2. Filet de sécurité : si le solde n'arrive pas, on démarre après un délai.
   startFallbackTimer = setTimeout(() => beginSearches().catch(reportError), SCRAPE_TIMEOUT_MS);
   return getState();
 }
 
-/**
- * Démarre effectivement les recherches (après lecture du solde + pause), puis ferme le
- * dashboard pendant la première recherche. Idempotent grâce au drapeau searchesStarted.
- */
+// Lance les recherches (idempotent) puis ferme le dashboard.
 async function beginSearches() {
   if (searchesStarted) return;
   searchesStarted = true;
@@ -227,12 +187,11 @@ async function beginSearches() {
 
   const settings = await getSettings();
   if (settings.enableSearches && totalSearches(settings) > 0) {
-    await searchTick(); // ouvre la 1re recherche + planifie la suite
+    await searchTick();
   } else {
     await broadcastState({ status: settings.enableDailyTasks ? STATUS.TASKS : STATUS.DONE });
   }
 
-  // Ferme le dashboard pendant la première recherche.
   closeDashboard();
 }
 
@@ -243,12 +202,8 @@ function closeDashboard() {
   browser.tabs.remove(id).catch(() => {});
 }
 
-/**
- * Arrête l'automatisation : coupe les recherches en cours, réinitialise l'affichage du
- * popup (sauf les points), puis rouvre Rewards pour relire le score réel du moment.
- */
+// Stoppe le run, réinitialise l'affichage (sauf les points) et relit le solde courant.
 async function stopRun() {
-  // Empêche tout (re)démarrage en attente et coupe la boucle de recherche.
   searchesStarted = true;
   if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
   if (tasksFallbackTimer) { clearTimeout(tasksFallbackTimer); tasksFallbackTimer = null; }
@@ -260,24 +215,17 @@ async function stopRun() {
   closeEarnTab();
   closeFinalTab();
 
-  // Réinitialise l'état affiché, en conservant les points connus.
   await broadcastState({ status: STATUS.IDLE, searchesDone: 0, error: null, lastRun: null });
-
-  // Relit le solde actuel (les recherches déjà faites ont pu rapporter des points).
   await refreshPoints();
   return getState();
 }
 
-/** Ouvre Rewards en arrière-plan pour relire le solde, puis referme l'onglet. */
 async function refreshPoints() {
   try {
     const tab = await browser.tabs.create({ url: URLS.REWARDS_DASHBOARD, active: false });
     refreshTabId = tab.id;
-    // Filet de sécurité : referme même si la lecture n'aboutit pas.
     setTimeout(() => closeRefreshTab(), SCRAPE_TIMEOUT_MS);
-  } catch (err) {
-    // Ouverture impossible : on ne fait rien de plus.
-  }
+  } catch (err) { /* ignore */ }
 }
 
 function closeRefreshTab() {
@@ -287,12 +235,8 @@ function closeRefreshTab() {
   browser.tabs.remove(id).catch(() => {});
 }
 
-// --- Phase "tâches" : Ensemble du jour --------------------------------------
+// --- Ensemble du jour -------------------------------------------------------
 
-/**
- * Ouvre le dashboard Rewards en statut TASKS : le content script relit le solde puis
- * clique les 3 cartes de l'Ensemble du jour, et signale la fin (DAILY_SET_DONE).
- */
 async function startDailySet() {
   await broadcastState({ status: STATUS.TASKS });
   try {
@@ -302,11 +246,9 @@ async function startDailySet() {
     await broadcastState({ status: STATUS.DONE });
     return;
   }
-  // Filet de sécurité : termine même si le content script ne signale rien.
   tasksFallbackTimer = setTimeout(() => finishDailySet().catch(reportError), DAILY_SET_TIMEOUT_MS);
 }
 
-/** Termine la phase tâches : ferme le dashboard, puis enchaîne sur "Continuer à gagner". */
 async function finishDailySet() {
   if (tasksFallbackTimer) { clearTimeout(tasksFallbackTimer); tasksFallbackTimer = null; }
   closeTasksTab();
@@ -321,12 +263,8 @@ function closeTasksTab() {
   browser.tabs.remove(id).catch(() => {});
 }
 
-// --- Phase "earn" : Continuer à gagner --------------------------------------
+// --- Continuer à gagner -----------------------------------------------------
 
-/**
- * Ouvre la page /earn (statut EARN) : le content script clique les cartes "Continuer à
- * gagner" qui rapportent des points, puis signale la fin (EARN_DONE).
- */
 async function startEarn() {
   await broadcastState({ status: STATUS.EARN });
   try {
@@ -336,11 +274,9 @@ async function startEarn() {
     await readFinalScore();
     return;
   }
-  // Filet de sécurité : passe à la suite même si le content script ne signale rien.
   earnFallbackTimer = setTimeout(() => finishEarn().catch(reportError), EARN_TIMEOUT_MS);
 }
 
-/** Termine la phase earn : ferme la page /earn, puis relit le score final. */
 async function finishEarn() {
   if (earnFallbackTimer) { clearTimeout(earnFallbackTimer); earnFallbackTimer = null; }
   closeEarnTab();
@@ -355,13 +291,8 @@ function closeEarnTab() {
   browser.tabs.remove(id).catch(() => {});
 }
 
-// --- Phase "finalisation" : lecture du score final --------------------------
+// --- Finalisation (score final) ---------------------------------------------
 
-/**
- * Rouvre le dashboard (statut FINALIZING) pour relire le solde final. Le content script
- * ne relance PAS l'Ensemble du jour (statut != TASKS). La fin (DONE) est déclenchée à la
- * réception du solde (handler POINTS_UPDATE), ou par le filet de sécurité.
- */
 async function readFinalScore() {
   await broadcastState({ status: STATUS.FINALIZING });
   try {
@@ -374,7 +305,6 @@ async function readFinalScore() {
   finalFallbackTimer = setTimeout(() => finishFinalize().catch(reportError), SCRAPE_TIMEOUT_MS);
 }
 
-/** Clôt la finalisation : ferme le dashboard et passe en DONE. */
 async function finishFinalize() {
   if (finalFallbackTimer) { clearTimeout(finalFallbackTimer); finalFallbackTimer = null; }
   closeFinalTab();
@@ -389,15 +319,11 @@ function closeFinalTab() {
   browser.tabs.remove(id).catch(() => {});
 }
 
-/**
- * Une "étape" de recherche : ouvre un onglet de recherche tant que le quota n'est pas
- * atteint, puis planifie l'étape suivante via l'alarme ALARM_SEARCH.
- * Tout est recalculé depuis le storage car l'event page peut être déchargée entre deux
- * déclenchements d'alarme (pas d'état gardé en mémoire).
- */
+// Une recherche par appel ; l'état est relu depuis le storage car l'event page peut être
+// déchargée entre deux alarmes.
 async function searchTick() {
   const state = await getState();
-  if (state.status !== STATUS.SEARCHING) return; // stoppé entre-temps
+  if (state.status !== STATUS.SEARCHING) return;
 
   const settings = await getSettings();
   const total = totalSearches(settings);
@@ -410,17 +336,15 @@ async function searchTick() {
     return;
   }
 
-  // Temps avant fermeture de l'onglet : aléatoire entre closeMinMs et closeMaxMs.
   const closeMs = getRandomNumber(settings.closeMinMs, settings.closeMaxMs);
   await performSearch(undefined, closeMs);
   await broadcastState({ searchesDone: done + 1 });
 
-  // Temps entre les recherches : délai aléatoire entre minDelayMs et maxDelayMs.
   const delayMs = getRandomNumber(settings.minDelayMs, settings.maxDelayMs);
   await browser.alarms.create(ALARM_SEARCH, { delayInMinutes: Math.max(delayMs / 60000, 0.1) });
 }
 
-// --- Moteur de recherche (par onglets) -------------------------------------
+// --- Recherche (par onglets) ------------------------------------------------
 
 function getRandomNumber(min, max) {
   return Math.floor(Math.random() * (max - min + 1) + min);
@@ -430,33 +354,19 @@ function getRandomElement(array) {
   return array[getRandomNumber(0, array.length - 1)];
 }
 
-/** Génère une requête aléatoire : 2-4 mots, ou une courte chaîne aléatoire. */
-function randomQuery(useWords = true) {
-  if (!useWords) return Math.random().toString(36).substring(2, getRandomNumber(5, 8));
+function randomQuery() {
   const count = getRandomNumber(2, 4);
   let s = '';
   for (let i = 0; i < count; i++) s += `${getRandomElement(words)} `;
   return s.trim();
 }
 
-/**
- * Effectue une recherche Bing pour la requête donnée en ouvrant un onglet en
- * arrière-plan (puis en le refermant) — même mécanique que openTab, mais avec un
- * texte imposé plutôt qu'aléatoire.
- * @param {string} [query]  texte à rechercher ; si vide, une requête aléatoire est générée
- * @param {number} [closeTime]  délai avant fermeture de l'onglet, en ms
- */
 async function performSearch(query, closeTime = FALLBACK_CLOSE_MS) {
-  const text = query && query.trim() ? query.trim() : randomQuery(true);
-  // Préfixe d'un caractère aléatoire, comme openTab (variété / contournement du cache).
+  const text = query && query.trim() ? query.trim() : randomQuery();
+  // Préfixe aléatoire pour varier les requêtes.
   const prefixed = `${Math.random().toString(36).charAt(2)}${text}`;
   const url = `${BING_SEARCH_URL}${encodeURIComponent(prefixed)}${BING_SEARCH_PARAMS}`;
   openAndClose(url, closeTime);
-}
-
-/** Variante à requête aléatoire, conservée pour compatibilité avec le reste du code. */
-async function openTab(useWords, closeTime) {
-  return performSearch(randomQuery(useWords), closeTime);
 }
 
 function openAndClose(url, closeTime) {
@@ -481,7 +391,6 @@ function waitAndClose(id, timeout = FALLBACK_CLOSE_MS) {
 
 // --- Utilitaires ------------------------------------------------------------
 
-/** Met à jour l'état persisté puis le diffuse au popup (best-effort). */
 async function broadcastState(patch) {
   const next = await setState(patch);
   browser.runtime.sendMessage({ type: MSG.STATE_UPDATE, payload: next }).catch(() => {});
@@ -489,12 +398,10 @@ async function broadcastState(patch) {
 }
 
 async function reportError(err) {
-  // eslint-disable-next-line no-console
-  console.error('[AutoMicrosoftRewards] run error:', err);
+  console.error('[AutoMicrosoftRewards]', err);
   await broadcastState({ status: STATUS.ERROR, error: String(err?.message || err) });
 }
 
-// new Date().toISOString() est OK ici (contexte runtime réel, pas un test/workflow).
 function nowIso() {
   return new Date().toISOString();
 }

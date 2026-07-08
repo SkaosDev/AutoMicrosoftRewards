@@ -8,10 +8,8 @@ export default defineConfig({
     preact(),
     webExtension({
       manifest: () => manifest,
-      // Firefox comme cible par défaut (MV3 event page).
       browser: 'firefox',
-      // Ne PAS lancer un Firefox jetable (profil vierge sans session Microsoft).
-      // On charge dist/ comme module temporaire dans son propre Firefox à la place.
+      // On charge dist/ manuellement dans son propre Firefox, pas dans un profil jetable.
       disableAutoLaunch: true,
     }),
   ],

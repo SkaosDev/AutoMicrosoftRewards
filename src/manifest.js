@@ -1,5 +1,4 @@
-// Manifest V3 pour Firefox, défini en JS pour être injecté par vite-plugin-web-extension.
-// Firefox utilise `background.scripts` (event page) plutôt qu'un service worker.
+// Manifest V3 (Firefox).
 
 export default {
   manifest_version: 3,
@@ -23,7 +22,6 @@ export default {
   ],
 
   background: {
-    // Event page (non persistante) — forme supportée par Firefox pour MV3.
     scripts: ['src/background/index.js'],
     type: 'module',
   },
@@ -52,8 +50,6 @@ export default {
   },
 
   content_scripts: [
-    // Les recherches Bing se font en ouvrant des onglets depuis le background : pas
-    // besoin de content script sur www.bing.com. Seul reste celui de la page Rewards.
     {
       matches: ['https://rewards.bing.com/*', 'https://account.microsoft.com/*'],
       js: ['src/content/rewards-page.js'],
