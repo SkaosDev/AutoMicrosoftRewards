@@ -25,8 +25,12 @@
 
 - 🔎 **Recherches Bing automatiques** — ouvre des onglets de recherche en arrière-plan
   avec des requêtes aléatoires, puis les referme, à un rythme configurable.
-- 💰 **Lecture du solde** — au démarrage, ouvre le dashboard Rewards, lit le nombre de
-  points disponibles et l'affiche dans le popup (`…` tant que le solde est inconnu).
+- 🗓️ **Ensemble du jour** — après les recherches, ouvre et « clique » les 3 cartes du
+  daily set.
+- ➕ **Continuer à gagner** — parcourt la page *Continuer à gagner* et n'ouvre que les
+  cartes qui rapportent encore des points (badge `+xx`), en ignorant celles déjà faites.
+- 💰 **Lecture du solde** — lit le nombre de points disponibles sur le dashboard Rewards
+  (au démarrage puis en fin de run) et l'affiche dans le popup (`…` tant qu'il est inconnu).
 - ⏰ **Planification quotidienne** — option pour lancer automatiquement l'automatisation
   chaque jour à une heure locale de votre choix.
 - ⏹️ **Arrêt à tout moment** — un bouton stoppe le run, réinitialise l'affichage
@@ -36,8 +40,8 @@
   réinitialisation complète de l'extension.
 - 🧩 **Manifest V3** — pensé pour Firefox (109+), sans dépendance à un service externe.
 
-> 🚧 La complétion automatique des tâches quotidiennes / quiz est prévue mais **pas
-> encore implémentée** (voir [Feuille de route](#feuille-de-route)).
+> 🚧 Les quiz/sondages ouverts par les cartes ne sont **pas encore résolus
+> automatiquement** (seule l'ouverture est faite) — voir [Feuille de route](#feuille-de-route).
 
 ## Stack technique
 
@@ -84,12 +88,17 @@ votre compte Microsoft) :
 1. Cliquez sur l'icône de l'extension pour ouvrir le popup.
 2. (Optionnel) Ouvrez **Réglages…** pour ajuster le nombre de recherches, les délais
    et la planification.
-3. Cliquez sur **Démarrer**. L'extension :
-   - ouvre le dashboard Rewards et lit votre solde de points ;
-   - affiche le solde dans le popup ;
-   - lance les recherches Bing après une courte pause, puis referme le dashboard.
+3. Cliquez sur **Démarrer**. Le run enchaîne alors :
+   1. ouverture du dashboard Rewards et lecture du solde (affiché dans le popup) ;
+   2. **recherches Bing** (après une courte pause, le dashboard est refermé) ;
+   3. **Ensemble du jour** : ouverture des 3 cartes du daily set ;
+   4. **Continuer à gagner** : ouverture des cartes restantes qui rapportent des points ;
+   5. **finalisation** : relecture du **score final**, puis statut **Terminé**.
 4. Pour interrompre, cliquez sur **Arrêter** : le run s'arrête, l'affichage est
    réinitialisé (les points sont conservés) et le score courant est relu.
+
+Le popup suit l'avancement : *Recherches en cours…* → *Tâches quotidiennes…* →
+*Continuer à gagner…* → *Finalisation…* → *Terminé*.
 
 ### Lancement automatique
 
@@ -110,7 +119,7 @@ déclenchera seule chaque jour à cette heure.
 | Temps avant fermeture (min/max)  | `4000` / `6000` ms  | Délai aléatoire avant de fermer un onglet |
 | Lancer automatiquement chaque jour | désactivé  | Planifie un run quotidien à heure fixe         |
 | Heure (locale)                   | `10:00`      | Heure du run quotidien (si planification activée) |
-| Tâches quotidiennes              | activées     | (À venir) complétion des tâches / quiz         |
+| Tâches quotidiennes              | activées     | Ensemble du jour + Continuer à gagner          |
 
 Le bouton **« Réinitialiser l'extension »** (section *Zone de danger*) efface tout le
 stockage — réglages, progression et points — et rétablit les valeurs par défaut.
@@ -131,7 +140,7 @@ Pendant le dev, après un changement, cliquez sur **« Recharger »** sur l'exte
 src/
 ├── manifest.js       # Définition du manifest MV3
 ├── background/       # Orchestrateur : recherches, alarmes, machine à états
-├── content/          # Script injecté sur la page Rewards (lecture du solde)
+├── content/          # Script Rewards : lecture du solde + clic des cartes (tâches)
 ├── popup/            # Dashboard Preact
 ├── options/          # Écran de réglages Preact
 └── lib/              # Modules partagés (storage, messaging, constants, rewards)
@@ -141,17 +150,22 @@ tests/                # Tests unitaires (Vitest)
 
 ## Feuille de route
 
-- [ ] Complétion automatique du *daily set*, des quiz et des sondages
+- [x] Ouverture automatique de l'Ensemble du jour et de *Continuer à gagner*
+- [ ] Résolution automatique des quiz / sondages (pour l'instant seulement ouverts)
 - [ ] Signature de l'extension pour une installation permanente
 - [ ] Robustesse des sélecteurs face aux évolutions du site Rewards
 
 ## Avertissement de fragilité
 
-L'extension s'appuie sur la structure HTML actuelle du site Microsoft Rewards
-(par ex. le libellé « Points disponibles » et certaines classes CSS). Microsoft peut
-modifier son site à tout moment et **casser la lecture du solde ou les recherches** ;
-les sélecteurs concernés sont regroupés en tête des fichiers `src/content/` et
-`src/background/` pour faciliter les corrections.
+L'extension s'appuie sur la structure HTML actuelle du site Microsoft Rewards : libellés
+(« Points disponibles », « Ensemble du jour », « Continuer à gagner »), badge de points
+`+xx` et certaines classes CSS (`react-aria-DisclosurePanel`, `text-pageHeader`…).
+Microsoft peut modifier son site à tout moment et **casser la lecture du solde ou le clic
+des cartes** ; les sélecteurs concernés sont regroupés en tête des fichiers
+`src/content/rewards-page.js` et `src/background/index.js` pour faciliter les corrections.
+
+De plus, les cartes sont ouvertes via un clic **synthétique** (`isTrusted = false`) :
+selon les évolutions de Microsoft, certaines activités pourraient ne pas être créditées.
 
 ## Licence
 
