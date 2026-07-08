@@ -31,6 +31,10 @@ const FALLBACK_CLOSE_MS = 5000;
 // de sécurité si la lecture du solde n'aboutit pas.
 const START_AFTER_POINTS_MS = 3000;
 const SCRAPE_TIMEOUT_MS = 15000;
+// Filet de sécurité : fin forcée de la phase "tâches" si le content script ne répond pas.
+const DAILY_SET_TIMEOUT_MS = 120000;
+// Idem pour "Continuer à gagner", plus long car la page peut compter davantage de cartes.
+const EARN_TIMEOUT_MS = 300000;
 
 // État de démarrage (en mémoire ; le run reste actif tant que la page vit).
 let dashboardTabId = null;
@@ -38,6 +42,15 @@ let searchesStarted = false;
 let startFallbackTimer = null;
 // Onglet Rewards ouvert juste pour relire le solde (à l'arrêt).
 let refreshTabId = null;
+// Onglet Rewards de la phase "tâches" (Ensemble du jour) + son filet de sécurité.
+let tasksTabId = null;
+let tasksFallbackTimer = null;
+// Onglet Rewards de la phase "earn" (Continuer à gagner) + son filet de sécurité.
+let earnTabId = null;
+let earnFallbackTimer = null;
+// Onglet Rewards de la phase "finalisation" (lecture du score final) + filet de sécurité.
+let finalTabId = null;
+let finalFallbackTimer = null;
 
 const words = [
   "food", "drink", "restaurant", "cafe", "bar", "pub", "club", "diner", "eatery", "tavern",
@@ -100,6 +113,18 @@ browser.alarms.onAlarm.addListener((alarm) => {
   else if (alarm.name === ALARM_SEARCH) searchTick().catch(reportError);
 });
 
+// Ferme les onglets ouverts par les cartes (Ensemble du jour / Continuer à gagner),
+// après un délai (mêmes bornes que la fermeture des onglets de recherche).
+browser.tabs.onCreated.addListener((tab) => {
+  const opener = tab.openerTabId;
+  if (opener == null || (opener !== tasksTabId && opener !== earnTabId)) return;
+  const id = tab.id;
+  getSettings().then((s) => {
+    const closeMs = getRandomNumber(s.closeMinMs, s.closeMaxMs);
+    setTimeout(() => browser.tabs.remove(id).catch(() => {}), closeMs);
+  }).catch(() => {});
+});
+
 // --- Planification quotidienne ----------------------------------------------
 
 /** (Re)planifie le lancement quotidien selon les réglages, en heure locale. */
@@ -132,21 +157,28 @@ function nextDailyTime(hhmm) {
 on(MSG.START, () => startRun());
 on(MSG.STOP, () => stopRun());
 on(MSG.GET_STATE, () => getState());
+on(MSG.DAILY_SET_DONE, () => finishDailySet());
+on(MSG.EARN_DONE, () => finishEarn());
 
 on(MSG.POINTS_UPDATE, async (payload) => {
   const points = Number(payload?.points);
   if (!Number.isNaN(points)) await broadcastState({ points });
 
-  // Si on avait ouvert Rewards juste pour relire le solde (à l'arrêt), on referme.
+  // Onglet ouvert juste pour relire le solde (à l'arrêt) : on referme.
   closeRefreshTab();
 
-  // Pendant le démarrage : dès que le solde arrive, on lance les recherches après une pause.
-  if (!searchesStarted) {
-    const state = await getState();
-    if (state.status === STATUS.SEARCHING && (state.searchesDone || 0) === 0) {
-      if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
-      setTimeout(() => beginSearches().catch(reportError), START_AFTER_POINTS_MS);
-    }
+  const state = await getState();
+
+  // Finalisation : le solde final est arrivé -> on peut terminer.
+  if (state.status === STATUS.FINALIZING) {
+    await finishFinalize();
+    return;
+  }
+
+  // Démarrage : dès que le solde arrive, on lance les recherches après une pause.
+  if (!searchesStarted && state.status === STATUS.SEARCHING && (state.searchesDone || 0) === 0) {
+    if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
+    setTimeout(() => beginSearches().catch(reportError), START_AFTER_POINTS_MS);
   }
 });
 
@@ -219,8 +251,14 @@ async function stopRun() {
   // Empêche tout (re)démarrage en attente et coupe la boucle de recherche.
   searchesStarted = true;
   if (startFallbackTimer) { clearTimeout(startFallbackTimer); startFallbackTimer = null; }
+  if (tasksFallbackTimer) { clearTimeout(tasksFallbackTimer); tasksFallbackTimer = null; }
+  if (earnFallbackTimer) { clearTimeout(earnFallbackTimer); earnFallbackTimer = null; }
+  if (finalFallbackTimer) { clearTimeout(finalFallbackTimer); finalFallbackTimer = null; }
   await browser.alarms.clear(ALARM_SEARCH);
   closeDashboard();
+  closeTasksTab();
+  closeEarnTab();
+  closeFinalTab();
 
   // Réinitialise l'état affiché, en conservant les points connus.
   await broadcastState({ status: STATUS.IDLE, searchesDone: 0, error: null, lastRun: null });
@@ -249,6 +287,108 @@ function closeRefreshTab() {
   browser.tabs.remove(id).catch(() => {});
 }
 
+// --- Phase "tâches" : Ensemble du jour --------------------------------------
+
+/**
+ * Ouvre le dashboard Rewards en statut TASKS : le content script relit le solde puis
+ * clique les 3 cartes de l'Ensemble du jour, et signale la fin (DAILY_SET_DONE).
+ */
+async function startDailySet() {
+  await broadcastState({ status: STATUS.TASKS });
+  try {
+    const tab = await browser.tabs.create({ url: URLS.REWARDS_DASHBOARD, active: false });
+    tasksTabId = tab.id;
+  } catch (err) {
+    await broadcastState({ status: STATUS.DONE });
+    return;
+  }
+  // Filet de sécurité : termine même si le content script ne signale rien.
+  tasksFallbackTimer = setTimeout(() => finishDailySet().catch(reportError), DAILY_SET_TIMEOUT_MS);
+}
+
+/** Termine la phase tâches : ferme le dashboard, puis enchaîne sur "Continuer à gagner". */
+async function finishDailySet() {
+  if (tasksFallbackTimer) { clearTimeout(tasksFallbackTimer); tasksFallbackTimer = null; }
+  closeTasksTab();
+  const state = await getState();
+  if (state.status === STATUS.TASKS) await startEarn();
+}
+
+function closeTasksTab() {
+  if (tasksTabId == null) return;
+  const id = tasksTabId;
+  tasksTabId = null;
+  browser.tabs.remove(id).catch(() => {});
+}
+
+// --- Phase "earn" : Continuer à gagner --------------------------------------
+
+/**
+ * Ouvre la page /earn (statut EARN) : le content script clique les cartes "Continuer à
+ * gagner" qui rapportent des points, puis signale la fin (EARN_DONE).
+ */
+async function startEarn() {
+  await broadcastState({ status: STATUS.EARN });
+  try {
+    const tab = await browser.tabs.create({ url: URLS.REWARDS_EARN, active: false });
+    earnTabId = tab.id;
+  } catch (err) {
+    await readFinalScore();
+    return;
+  }
+  // Filet de sécurité : passe à la suite même si le content script ne signale rien.
+  earnFallbackTimer = setTimeout(() => finishEarn().catch(reportError), EARN_TIMEOUT_MS);
+}
+
+/** Termine la phase earn : ferme la page /earn, puis relit le score final. */
+async function finishEarn() {
+  if (earnFallbackTimer) { clearTimeout(earnFallbackTimer); earnFallbackTimer = null; }
+  closeEarnTab();
+  const state = await getState();
+  if (state.status === STATUS.EARN) await readFinalScore();
+}
+
+function closeEarnTab() {
+  if (earnTabId == null) return;
+  const id = earnTabId;
+  earnTabId = null;
+  browser.tabs.remove(id).catch(() => {});
+}
+
+// --- Phase "finalisation" : lecture du score final --------------------------
+
+/**
+ * Rouvre le dashboard (statut FINALIZING) pour relire le solde final. Le content script
+ * ne relance PAS l'Ensemble du jour (statut != TASKS). La fin (DONE) est déclenchée à la
+ * réception du solde (handler POINTS_UPDATE), ou par le filet de sécurité.
+ */
+async function readFinalScore() {
+  await broadcastState({ status: STATUS.FINALIZING });
+  try {
+    const tab = await browser.tabs.create({ url: URLS.REWARDS_DASHBOARD, active: false });
+    finalTabId = tab.id;
+  } catch (err) {
+    await broadcastState({ status: STATUS.DONE });
+    return;
+  }
+  finalFallbackTimer = setTimeout(() => finishFinalize().catch(reportError), SCRAPE_TIMEOUT_MS);
+}
+
+/** Clôt la finalisation : ferme le dashboard et passe en DONE. */
+async function finishFinalize() {
+  if (finalFallbackTimer) { clearTimeout(finalFallbackTimer); finalFallbackTimer = null; }
+  closeFinalTab();
+  const state = await getState();
+  if (state.status === STATUS.FINALIZING) await broadcastState({ status: STATUS.DONE });
+}
+
+function closeFinalTab() {
+  if (finalTabId == null) return;
+  const id = finalTabId;
+  finalTabId = null;
+  browser.tabs.remove(id).catch(() => {});
+}
+
 /**
  * Une "étape" de recherche : ouvre un onglet de recherche tant que le quota n'est pas
  * atteint, puis planifie l'étape suivante via l'alarme ALARM_SEARCH.
@@ -265,7 +405,8 @@ async function searchTick() {
 
   if (done >= total) {
     await browser.alarms.clear(ALARM_SEARCH);
-    await broadcastState({ status: settings.enableDailyTasks ? STATUS.TASKS : STATUS.DONE });
+    if (settings.enableDailyTasks) await startDailySet();
+    else await readFinalScore();
     return;
   }
 

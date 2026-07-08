@@ -10,6 +10,8 @@ export const MSG = {
   SCRAPE_POINTS: 'scrape-points',
   // content -> background
   POINTS_UPDATE: 'points-update',
+  DAILY_SET_DONE: 'daily-set-done',
+  EARN_DONE: 'earn-done',
   // background -> popup (broadcast)
   STATE_UPDATE: 'state-update',
 };
@@ -19,6 +21,8 @@ export const STATUS = {
   IDLE: 'idle',
   SEARCHING: 'searching',
   TASKS: 'tasks',
+  EARN: 'earn',
+  FINALIZING: 'finalizing',
   DONE: 'done',
   ERROR: 'error',
 };
@@ -59,4 +63,5 @@ export const URLS = {
   BING_SEARCH: 'https://www.bing.com/search',
   REWARDS: 'https://rewards.bing.com/',
   REWARDS_DASHBOARD: 'https://rewards.bing.com/dashboard',
+  REWARDS_EARN: 'https://rewards.bing.com/earn',
 };

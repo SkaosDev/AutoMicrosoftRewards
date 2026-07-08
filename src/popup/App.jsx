@@ -9,6 +9,8 @@ const STATUS_LABEL = {
   [STATUS.IDLE]: 'En attente',
   [STATUS.SEARCHING]: 'Recherches en cours…',
   [STATUS.TASKS]: 'Tâches quotidiennes…',
+  [STATUS.EARN]: 'Continuer à gagner…',
+  [STATUS.FINALIZING]: 'Finalisation…',
   [STATUS.DONE]: 'Terminé',
   [STATUS.ERROR]: 'Erreur',
 };
@@ -29,7 +31,10 @@ export function App() {
     return () => browser.runtime.onMessage.removeListener(listener);
   }, []);
 
-  const running = state.status === STATUS.SEARCHING || state.status === STATUS.TASKS;
+  const running = state.status === STATUS.SEARCHING
+    || state.status === STATUS.TASKS
+    || state.status === STATUS.EARN
+    || state.status === STATUS.FINALIZING;
   const pct = progressPercent(state.searchesDone || 0, total);
 
   return (
